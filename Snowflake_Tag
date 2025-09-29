@@ -1,0 +1,93 @@
+CREATE DATABASE TEST;
+
+CREATE SCHEMA NEW;
+
+-- Step 1: Create the table
+CREATE OR REPLACE TABLE METADATA_LOG (
+    PK              INT AUTOINCREMENT PRIMARY KEY,
+    Database_Name   STRING,
+    Schema_Name     STRING,
+    Table_Name      STRING,
+    Object_Type     STRING,
+    Tag_Key         STRING,
+    Tag_Value       STRING,
+    Action          STRING,
+    RunID           STRING,
+    IsActive        STRING
+);
+
+-- Step 2: Insert sample data from the image
+INSERT INTO METADATA_LOG 
+(Database_Name, Schema_Name, Table_Name, Object_Type, Tag_Key, Tag_Value, Action, RunID, IsActive)
+VALUES
+('TEST', 'NEW', 'CUSTOMER', 'TABLE', 'SEGMENT', 'PII', 'set', '202409-01', '1');
+
+--UPDATE METADATA_LOG SET Tag_Value = 'Confidential'
+--UPDATE METADATA_LOG SET Action = 'UNSET'
+
+CREATE TABLE CUSTOMER (ID INT);
+
+CREATE TAG SEGMENT ALLOWED_VALUES 'PII', 'Confidential', 'Public';
+
+-------------------------------------------------------------------------------
+
+
+CREATE OR REPLACE PROCEDURE GENERATE_TAG_COMMANDS()
+RETURNS STRING
+LANGUAGE SQL
+EXECUTE AS CALLER
+AS
+$$
+DECLARE
+    -- Variables to hold data from the cursor
+    v_db        STRING;
+    v_schema    STRING;
+    v_table     STRING;
+    v_tag_key   STRING;
+    v_tag_value STRING;
+    v_action    STRING;
+    
+    -- Variables for building the commands
+    v_sql       STRING;
+    v_all_commands STRING DEFAULT ''; -- An empty string to accumulate the results
+
+    -- Cursor to select the work to be done for the given RunID
+    c1 CURSOR FOR
+        SELECT Database_Name, Schema_Name, Table_Name, Tag_Key, Tag_Value, Action
+        FROM METADATA_LOG;
+        
+
+BEGIN
+    -- Loop through each record found by the cursor
+    FOR rec IN c1 DO
+        -- Assign record values to local variables
+        v_db        := rec.Database_Name;
+        v_schema    := rec.Schema_Name;
+        v_table     := rec.Table_Name;
+        v_tag_key   := rec.Tag_Key;
+        v_tag_value := rec.Tag_Value;
+        v_action    := rec.Action;
+        
+        IF (UPPER(v_action) = 'SET') THEN 
+            v_sql := CONCAT('ALTER TABLE "', v_db, '"."', v_schema, '"."', v_table, '" ',
+            'SET TAG "', v_tag_key, '" = ''', v_tag_value, '''');
+         ELSE
+            v_sql := CONCAT('ALTER TABLE "', v_db, '"."', v_schema, '"."', v_table, '" UNSET TAG "', v_tag_key, '";');
+
+       
+        END IF;
+
+        EXECUTE IMMEDIATE :v_sql;
+        
+
+        -- Append the generated command to the final string, followed by a newline character
+        v_all_commands := v_all_commands || v_sql || '\n';
+
+    END FOR;
+
+    RETURN v_all_commands;
+END;
+$$;
+
+--------------------------------------------------------
+call GENERATE_TAG_COMMANDS()
