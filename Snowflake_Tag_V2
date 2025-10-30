@@ -1,0 +1,66 @@
+CREATE OR REPLACE PROCEDURE GENERATE_TAG_COMMANDS(p_runid STRING)
+RETURNS STRING
+LANGUAGE SQL
+EXECUTE AS CALLER
+AS
+$$
+DECLARE
+    -- Variables for cursor data
+    v_db        STRING;
+    v_schema    STRING;
+    v_table     STRING;
+    v_tag_key   STRING;
+    v_tag_value STRING;
+    v_action    STRING;
+
+    -- Variables for dynamic execution
+    v_sql_query STRING;
+    v_sql       STRING;
+    v_all_commands STRING DEFAULT '';
+    v_cursor    RESULTSET;   -- dynamic cursor
+BEGIN
+    -- Build the query dynamically so we can filter by RunID
+    v_sql_query := 'SELECT Database_Name, Schema_Name, Table_Name, Tag_Key, Tag_Value, Action
+                    FROM METADATA_LOG
+                    WHERE IsActive = ''1''';
+
+    -- Add runid condition if provided
+    IF (p_runid IS NOT NULL) THEN
+        v_sql_query := v_sql_query || ' AND RunID = ''' || p_runid || '''';
+    END IF;
+
+    -- Execute the query dynamically and assign to cursor
+    v_cursor := (EXECUTE IMMEDIATE :v_sql_query);
+
+    -- Loop through each record
+    FOR rec IN v_cursor DO
+        v_db        := rec.Database_Name;
+        v_schema    := rec.Schema_Name;
+        v_table     := rec.Table_Name;
+        v_tag_key   := rec.Tag_Key;
+        v_tag_value := rec.Tag_Value;
+        v_action    := rec.Action;
+
+        -- Build the ALTER TABLE command dynamically
+        IF (UPPER(v_action) = 'SET') THEN
+            v_sql := CONCAT(
+                'ALTER TABLE "', v_db, '"."', v_schema, '"."', v_table,
+                '" SET TAG "', v_tag_key, '" = ''', v_tag_value, ''''
+            );
+        ELSE
+            v_sql := CONCAT(
+                'ALTER TABLE "', v_db, '"."', v_schema, '"."', v_table,
+                '" UNSET TAG "', v_tag_key, '"'
+            );
+        END IF;
+
+        -- Execute the ALTER TABLE command
+        EXECUTE IMMEDIATE :v_sql;
+
+        -- Append to the final log string
+        v_all_commands := v_all_commands || v_sql || '\n';
+    END FOR;
+
+    RETURN 'Executed for RunID: ' || COALESCE(p_runid, 'ALL') || '\n' || v_all_commands;
+END;
+$$;
